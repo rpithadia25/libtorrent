@@ -991,7 +991,7 @@ bool ssl_server_name_callback(ssl::stream_handle_type stream_handle, std::string
 		m_lsd_announce_timer.cancel();
 
 #ifdef TORRENT_SSL_PEERS
-		for (auto& s : m_incoming_sockets)
+		for (auto const& s : m_incoming_sockets)
 		{
 			s->close(ec);
 			TORRENT_ASSERT(!ec);
@@ -1212,7 +1212,7 @@ namespace {
 #endif
 
 		TORRENT_ASSERT(req.outgoing_socket);
-			auto ls = req.outgoing_socket.get();
+		auto* ls = req.outgoing_socket.get();
 
 		req.listen_port =
 #if TORRENT_USE_I2P
@@ -3966,7 +3966,7 @@ namespace {
 		// collect the n best candidates. maybe just a queue of peers would make
 		// even more sense, just pick the next peer in the queue for unchoking. It
 		// would be O(1).
-		for (auto& i : m_connections)
+		for (auto const& i : m_connections)
 		{
 			peer_connection* const p = i.get();
 			TORRENT_ASSERT(p);
@@ -4301,7 +4301,7 @@ namespace {
 
 		// go through all the peers and unchoke the first ones and choke
 		// all the other ones.
-		for (auto p : peers)
+		for (auto* const p : peers)
 		{
 			TORRENT_ASSERT(p != nullptr);
 			TORRENT_ASSERT(!p->ignore_unchoke_slots());
@@ -4937,7 +4937,7 @@ namespace {
 
 			std::vector<std::shared_ptr<listen_socket_t>> with_gateways;
 			std::shared_ptr<listen_socket_t> match;
-			for (auto& ls : m_listen_sockets)
+			for (auto const& ls : m_listen_sockets)
 			{
 				if (is_v4(ls->local_endpoint) != remote_address.is_v4()) continue;
 				if (ls->ssl != ssl) continue;
@@ -5350,7 +5350,7 @@ namespace {
 
 	int session_impl::get_listen_port(transport const ssl, aux::listen_socket_handle const& s)
 	{
-		auto socket = s.get();
+		auto* socket = s.get();
 		if (socket->ssl != ssl)
 		{
 			auto alt_socket = std::find_if(m_listen_sockets.begin(), m_listen_sockets.end()
