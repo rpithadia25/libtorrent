@@ -67,6 +67,109 @@ namespace aux {
 		optimize_storage();
 	}
 
+	void merkle_tree::clear()
+	{
+		m_tree.clear();
+		m_tree.shrink_to_fit();
+		m_mode = mode_t::empty_tree;
+	}
+
+namespace {
+
+	// TODO: in C++20, use std::identity
+	struct identity
+	{
+		bool operator()(bool b) const { return b; }
+	};
+}
+
+	void merkle_tree::load_sparse_tree(span<sha256_hash const> t, std::vector<bool> const& mask)
+	{
+		TORRENT_ASSERT(mask.size() == size());
+		if (size() != mask.size()) return;
+
+		int const first_block = block_layer_start();
+		int const end_block = first_block + m_num_blocks;
+
+		TORRENT_ASSERT(first_block < int(mask.size()));
+		TORRENT_ASSERT(end_block <= int(mask.size()));
+
+		// if the mask convers all blocks, go straight to block_layer
+		// mode, and validate
+		if (std::all_of(mask.begin() + first_block, mask.begin() + end_block, identity()))
+		{
+			// the index in t that points to first_block
+			auto const block_index = std::count_if(mask.begin(), mask.begin() + first_block, identity());
+
+			// discrepancy
+			if (t.size() < block_index + m_num_blocks)
+				return clear();
+
+			m_tree.assign(t.begin() + block_index, t.begin() + block_index + m_num_blocks);
+			m_mode = mode_t::block_layer;
+
+			sha256_hash const r = merkle_root(m_tree);
+			// validation failed!
+			if (r != root()) clear();
+			return;
+		}
+
+		// if the piece layer is the same as the block layer, skip this next
+		// check
+		if (m_blocks_per_piece_log > 0)
+		{
+			int const first_piece = piece_layer_start();
+			int const piece_count = num_pieces();
+			int const end_piece = first_piece + piece_count;
+
+			TORRENT_ASSERT(first_piece < int(mask.size()));
+			TORRENT_ASSERT(end_piece <= int(mask.size()));
+
+			// if the mask convers all pieces, and nothing below that layer, go
+			// straight to piece_layer mode and validate
+			if (std::all_of(mask.begin() + first_piece, mask.begin() + end_piece, identity())
+
+				&& std::all_of(mask.begin() + end_piece, mask.end(), std::logical_not<>()))
+			{
+				// the index in t that points to first_piece
+				auto const piece_index = std::count_if(mask.begin(), mask.begin() + first_piece, identity());
+				// discrepancy
+				if (t.size() < piece_index + piece_count)
+					return clear();
+
+				m_tree.assign(t.begin() + piece_index, t.begin() + piece_index + piece_count);
+				m_mode = mode_t::piece_layer;
+
+				sha256_hash const piece_layer_pad = merkle_pad(1 << m_blocks_per_piece_log, 1);
+				sha256_hash const r = merkle_root(m_tree, piece_layer_pad);
+				// validation failed!
+				if (r != root()) clear();
+				return;
+			}
+		}
+
+		// if the mask has only zeros, go straight to empty tree mode
+		if (t.empty() || std::none_of(mask.begin(), mask.end(), identity()))
+			return clear();
+
+		allocate_full();
+		int cursor = 0;
+		for (std::size_t i = 0, end = mask.size(); i < end; ++i)
+		{
+			if (!mask[i]) continue;
+			if (cursor >= t.size()) break;
+			m_tree[int(i)] = t[cursor++];
+		}
+		merkle_fill_partial_tree(m_tree);
+
+		// this suggests that none of the hashes in the tree can be
+		// validated against the root. We effectively have an empty tree.
+		if (m_tree[0] != root())
+			return clear();
+
+		optimize_storage();
+	}
+
 	// returns false if the piece layer fails to validate against the root hash
 	bool merkle_tree::load_piece_layer(span<char const> piece_layer)
 	{
@@ -421,6 +524,47 @@ namespace aux {
 		}
 		ret[0] = root();
 		return ret;
+	}
+
+	std::pair<std::vector<sha256_hash>, std::vector<bool>> merkle_tree::build_sparse_vector() const
+	{
+		if (m_mode == mode_t::uninitialized_tree) return {{}, {}};
+
+		std::vector<bool> mask(size(), false);
+		std::vector<sha256_hash> ret;
+		switch (m_mode)
+		{
+			case mode_t::uninitialized_tree: break;
+			case mode_t::empty_tree: break;
+			case mode_t::full_tree:
+				for (int i = 0, end = int(m_tree.size()); i < end; ++i)
+				{
+					if (m_tree[i].is_all_zeros()) continue;
+					ret.push_back(m_tree[i]);
+					mask[std::size_t(i)] = true;
+				}
+				break;
+			case mode_t::piece_layer:
+			{
+				int const num_leafs = merkle_num_leafs(m_num_blocks);
+				int const piece_layer_size = num_leafs >> m_blocks_per_piece_log;
+				for (int i = merkle_first_leaf(piece_layer_size), end = i + int(m_tree.size()); i < end; ++i)
+					mask[std::size_t(i)] = true;
+				ret.resize(m_tree.size());
+				std::copy(m_tree.begin(), m_tree.end(), ret.begin());
+				break;
+			}
+			case mode_t::block_layer:
+			{
+				int const num_leafs = merkle_num_leafs(m_num_blocks);
+				for (int i = merkle_first_leaf(num_leafs), end = i + int(m_tree.size()); i < end; ++i)
+					mask[std::size_t(i)] = true;
+				ret.resize(m_tree.size());
+				std::copy(m_tree.begin(), m_tree.end(), ret.begin());
+				break;
+			}
+		}
+		return {ret, mask};
 	}
 
 	void merkle_tree::allocate_full()

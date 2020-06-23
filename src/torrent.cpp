@@ -392,7 +392,8 @@ bool is_downloading_state(int const st)
 		if (m_torrent_file->is_valid() && m_torrent_file->info_hashes().has_v2())
 		{
 			if (!p.merkle_trees.empty())
-				m_torrent_file->internal_load_merkle_trees(std::move(p.merkle_trees));
+				m_torrent_file->internal_load_merkle_trees(
+					std::move(p.merkle_trees), std::move(p.merkle_tree_mask));
 
 			// we really don't want to store extra copies of the trees
 			TORRENT_ASSERT(p.merkle_trees.empty());
@@ -400,12 +401,7 @@ bool is_downloading_state(int const st)
 			if (!p.verified_leaf_hashes.empty())
 			{
 				TORRENT_ASSERT(!has_hash_picker());
-				aux::vector<aux::vector<bool>, file_index_t> verified;
-				verified.reserve(p.verified_leaf_hashes.size());
-				for (auto const& v : p.verified_leaf_hashes)
-					verified.emplace_back(v.begin(), v.end());
-				TORRENT_ASSERT(!m_hash_picker);
-				need_hash_picker(std::move(verified));
+				need_hash_picker(std::move(p.verified_leaf_hashes));
 			}
 		}
 
@@ -1185,7 +1181,7 @@ bool is_downloading_state(int const st)
 		}
 	}
 
-	void torrent::need_hash_picker(aux::vector<aux::vector<bool>, file_index_t> verified)
+	void torrent::need_hash_picker(aux::vector<std::vector<bool>, file_index_t> verified)
 	{
 		if (m_hash_picker)
 		{
@@ -6797,7 +6793,14 @@ namespace {
 			ret.merkle_trees.clear();
 			ret.merkle_trees.reserve(m_torrent_file->internal_merkle_trees().size());
 			for (auto const& t : m_torrent_file->internal_merkle_trees())
-				ret.merkle_trees.emplace_back(t.build_vector());
+			{
+				// use stuctured binding in C++17
+				std::vector<bool> mask;
+				std::vector<sha256_hash> sparse_tree;
+				std::tie(sparse_tree, mask) = t.build_sparse_vector();
+				ret.merkle_trees.emplace_back(sparse_tree);
+				ret.merkle_tree_mask.emplace_back(mask);
+			}
 
 			if (has_hash_picker())
 			{
